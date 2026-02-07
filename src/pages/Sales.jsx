@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { base44 } from '@/api/base44Client';
+import { api } from '@/api/supabaseClient';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -34,7 +34,7 @@ export default function Sales() {
 
   const createMutation = useMutation({
     mutationFn: async (data) => {
-      const sale = await base44.entities.Sale.create(data);
+      const sale = await api.entities.Sale.create(data);
       
       if (data.payment_method === 'credito_parcelado' && data.installments_data?.length) {
         const installments = data.installments_data.map(inst => ({

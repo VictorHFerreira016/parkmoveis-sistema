@@ -1,9 +1,9 @@
 import React, { useState } from 'react';
-import { base44 } from '@/api/base44Client';
+import { api } from '@/api/supabaseClient';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Plus, Search, Pencil, Trash2, Users, Phone, Mail, MapPin } from 'lucide-react';
+import { Plus, Search, Pencil, Trash2, Users, Phone, Mail, MapPin, Eye, X } from 'lucide-react';
 import ClientForm from '@/components/clients/ClientForm';
 import {
   AlertDialog,
@@ -15,22 +15,30 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Badge } from "@/components/ui/badge";
 
 export default function Clients() {
   const [showForm, setShowForm] = useState(false);
   const [editingClient, setEditingClient] = useState(null);
   const [deleteClient, setDeleteClient] = useState(null);
+  const [viewClient, setViewClient] = useState(null);
   const [search, setSearch] = useState('');
   
   const queryClient = useQueryClient();
 
   const { data: clients = [], isLoading } = useQuery({
     queryKey: ['clients'],
-    queryFn: () => base44.entities.Client.list()
+    queryFn: () => api.entities.Client.list()
   });
 
   const createMutation = useMutation({
-    mutationFn: (data) => base44.entities.Client.create(data),
+    mutationFn: (data) => api.entities.Client.create(data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['clients'] });
       setShowForm(false);
@@ -38,7 +46,7 @@ export default function Clients() {
   });
 
   const updateMutation = useMutation({
-    mutationFn: ({ id, data }) => base44.entities.Client.update(id, data),
+    mutationFn: ({ id, data }) => api.entities.Client.update(id, data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['clients'] });
       setShowForm(false);
@@ -47,7 +55,7 @@ export default function Clients() {
   });
 
   const deleteMutation = useMutation({
-    mutationFn: (id) => base44.entities.Client.delete(id),
+    mutationFn: (id) => api.entities.Client.delete(id),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['clients'] });
       setDeleteClient(null);
@@ -67,6 +75,48 @@ export default function Clients() {
     client.cpf?.includes(search) ||
     client.phone?.includes(search)
   );
+
+  const formatDate = (dateString) => {
+    if (!dateString) return '';
+    const date = new Date(dateString);
+    return date.toLocaleDateString('pt-BR');
+  };
+
+  const getAddressTypeLabel = (type) => {
+    const types = {
+      'residencial': 'Residencial',
+      'comercial': 'Comercial',
+      'cobranca': 'Cobrança',
+      'entrega': 'Entrega'
+    };
+    return types[type] || type;
+  };
+
+  const getPhoneTypeLabel = (type) => {
+    const types = {
+      'pessoal': 'Pessoal',
+      'comercial': 'Comercial',
+      'recado': 'Recado',
+      'whatsapp': 'WhatsApp'
+    };
+    return types[type] || type;
+  };
+
+  const getRelativeTypeLabel = (type) => {
+    const types = {
+      'pai': 'Pai',
+      'mae': 'Mãe',
+      'filho': 'Filho(a)',
+      'irmao': 'Irmão(ã)',
+      'conjuge': 'Cônjuge',
+      'avo': 'Avô/Avó',
+      'tio': 'Tio(a)',
+      'primo': 'Primo(a)',
+      'sobrinho': 'Sobrinho(a)',
+      'outro': 'Outro'
+    };
+    return types[type] || type;
+  };
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
@@ -123,6 +173,14 @@ export default function Clients() {
                     variant="ghost"
                     size="icon"
                     className="h-8 w-8 text-stone-400 hover:text-stone-600"
+                    onClick={() => setViewClient(client)}
+                  >
+                    <Eye className="w-4 h-4" />
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-8 w-8 text-stone-400 hover:text-stone-600"
                     onClick={() => {
                       setEditingClient(client);
                       setShowForm(true);
@@ -155,12 +213,28 @@ export default function Clients() {
                     {client.email}
                   </div>
                 )}
-                {client.city && (
-                  <div className="flex items-center gap-2 text-stone-600">
-                    <MapPin className="w-4 h-4 text-stone-400" />
-                    {client.city}{client.state ? `, ${client.state}` : ''}
-                  </div>
-                )}
+                
+                {/* Badges de informação adicional */}
+                <div className="flex flex-wrap gap-1 pt-2">
+                  {client.addresses && client.addresses.length > 0 && (
+                    <Badge variant="outline" className="text-xs">
+                      <MapPin className="w-3 h-3 mr-1" />
+                      {client.addresses.length} endereço(s)
+                    </Badge>
+                  )}
+                  {client.phones && client.phones.length > 0 && (
+                    <Badge variant="outline" className="text-xs">
+                      <Phone className="w-3 h-3 mr-1" />
+                      +{client.phones.length} telefone(s)
+                    </Badge>
+                  )}
+                  {client.relatives && client.relatives.length > 0 && (
+                    <Badge variant="outline" className="text-xs">
+                      <Users className="w-3 h-3 mr-1" />
+                      {client.relatives.length} parente(s)
+                    </Badge>
+                  )}
+                </div>
               </div>
             </div>
           ))}
@@ -195,6 +269,159 @@ export default function Clients() {
         client={editingClient}
       />
 
+      {/* View Client Dialog */}
+      <Dialog open={!!viewClient} onOpenChange={() => setViewClient(null)}>
+        <DialogContent className="sm:max-w-2xl bg-white max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="text-stone-900">Detalhes do Cliente</DialogTitle>
+          </DialogHeader>
+          
+          {viewClient && (
+            <div className="space-y-6">
+              {/* Dados Básicos */}
+              <div>
+                <h3 className="text-lg font-semibold text-stone-900 mb-3">Informações Básicas</h3>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 bg-stone-50 p-4 rounded-lg">
+                  <div>
+                    <p className="text-xs text-stone-500 mb-1">Nome</p>
+                    <p className="text-sm font-medium text-stone-900">{viewClient.name}</p>
+                  </div>
+                  {viewClient.cpf && (
+                    <div>
+                      <p className="text-xs text-stone-500 mb-1">CPF</p>
+                      <p className="text-sm font-medium text-stone-900">{viewClient.cpf}</p>
+                    </div>
+                  )}
+                  {viewClient.rg && (
+                    <div>
+                      <p className="text-xs text-stone-500 mb-1">RG</p>
+                      <p className="text-sm font-medium text-stone-900">{viewClient.rg}</p>
+                    </div>
+                  )}
+                  {viewClient.birthDate && (
+                    <div>
+                      <p className="text-xs text-stone-500 mb-1">Data de Nascimento</p>
+                      <p className="text-sm font-medium text-stone-900">{formatDate(viewClient.birthDate)}</p>
+                    </div>
+                  )}
+                  {viewClient.occupation && (
+                    <div>
+                      <p className="text-xs text-stone-500 mb-1">Ocupação</p>
+                      <p className="text-sm font-medium text-stone-900">{viewClient.occupation}</p>
+                    </div>
+                  )}
+                  <div>
+                    <p className="text-xs text-stone-500 mb-1">Celular Principal</p>
+                    <p className="text-sm font-medium text-stone-900">{viewClient.phone}</p>
+                  </div>
+                  {viewClient.email && (
+                    <div className="sm:col-span-2">
+                      <p className="text-xs text-stone-500 mb-1">Email</p>
+                      <p className="text-sm font-medium text-stone-900">{viewClient.email}</p>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Endereços */}
+              {viewClient.addresses && viewClient.addresses.length > 0 && (
+                <div>
+                  <h3 className="text-lg font-semibold text-stone-900 mb-3 flex items-center gap-2">
+                    <MapPin className="w-5 h-5" />
+                    Endereços
+                  </h3>
+                  <div className="space-y-3">
+                    {viewClient.addresses.map((address, index) => (
+                      <div key={index} className="bg-stone-50 p-4 rounded-lg border border-stone-200">
+                        <div className="flex items-center justify-between mb-2">
+                          <Badge variant="secondary" className="text-xs">
+                            {getAddressTypeLabel(address.tipo)}
+                          </Badge>
+                        </div>
+                        <div className="space-y-1 text-sm">
+                          <p className="text-stone-900">
+                            {address.logradouro}, {address.numero}
+                          </p>
+                          <p className="text-stone-600">
+                            {address.bairro}
+                          </p>
+                          <p className="text-stone-600">
+                            {address.cidade} - {address.estado}
+                          </p>
+                          {address.cep && (
+                            <p className="text-stone-500">CEP: {address.cep}</p>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Telefones Adicionais */}
+              {viewClient.phones && viewClient.phones.length > 0 && (
+                <div>
+                  <h3 className="text-lg font-semibold text-stone-900 mb-3 flex items-center gap-2">
+                    <Phone className="w-5 h-5" />
+                    Telefones Adicionais
+                  </h3>
+                  <div className="space-y-2">
+                    {viewClient.phones.map((phone, index) => (
+                      <div key={index} className="bg-stone-50 p-3 rounded-lg border border-stone-200 flex items-center justify-between">
+                        <div>
+                          <p className="text-sm font-medium text-stone-900">{phone.numero}</p>
+                          <p className="text-xs text-stone-500">
+                            {getPhoneTypeLabel(phone.tipo)} - {phone.pertence_a}
+                          </p>
+                        </div>
+                        <Badge variant="outline" className="text-xs">
+                          {getPhoneTypeLabel(phone.tipo)}
+                        </Badge>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Parentes */}
+              {viewClient.relatives && viewClient.relatives.length > 0 && (
+                <div>
+                  <h3 className="text-lg font-semibold text-stone-900 mb-3 flex items-center gap-2">
+                    <Users className="w-5 h-5" />
+                    Parentes
+                  </h3>
+                  <div className="space-y-2">
+                    {viewClient.relatives.map((relative, index) => (
+                      <div key={index} className="bg-stone-50 p-3 rounded-lg border border-stone-200 flex items-center justify-between">
+                        <div>
+                          <p className="text-sm font-medium text-stone-900">{relative.nome_parente}</p>
+                          <p className="text-xs text-stone-500">
+                            {getRelativeTypeLabel(relative.parentesco)}
+                          </p>
+                        </div>
+                        <Badge variant="outline" className="text-xs">
+                          {getRelativeTypeLabel(relative.parentesco)}
+                        </Badge>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              <div className="flex justify-end pt-4 border-t">
+                <Button
+                  onClick={() => setViewClient(null)}
+                  variant="outline"
+                  className="border-stone-200"
+                >
+                  Fechar
+                </Button>
+              </div>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+
       {/* Delete Confirmation */}
       <AlertDialog open={!!deleteClient} onOpenChange={() => setDeleteClient(null)}>
         <AlertDialogContent className="bg-white">
@@ -202,6 +429,7 @@ export default function Clients() {
             <AlertDialogTitle>Excluir cliente?</AlertDialogTitle>
             <AlertDialogDescription>
               Tem certeza que deseja excluir {deleteClient?.name}? Esta ação não pode ser desfeita.
+              Todos os endereços, telefones e parentes associados também serão excluídos.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
