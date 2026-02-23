@@ -17,53 +17,40 @@ export default function Sales() {
   
   const queryClient = useQueryClient();
 
+  // ✅ Buscar vendas com itens e parcelas relacionados
   const { data: sales = [], isLoading } = useQuery({
-    queryKey: ['sales'],
-    queryFn: () => base44.entities.Sale.list('-created_date')
+    queryKey: ['vendas'],
+    queryFn: () => api.entities.Sale.list()
   });
 
+  // ✅ Buscar clientes (nomes corretos das colunas)
   const { data: clients = [] } = useQuery({
-    queryKey: ['clients'],
-    queryFn: () => base44.entities.Client.list()
+    queryKey: ['clientes'],
+    queryFn: () => api.entities.Client.list()
   });
 
+  // ✅ Buscar produtos (nomes corretos das colunas)
   const { data: products = [] } = useQuery({
-    queryKey: ['products'],
-    queryFn: () => base44.entities.Product.list()
+    queryKey: ['produtos'],
+    queryFn: () => api.entities.Product.list()
   });
 
+  // ✅ Mutation para criar venda (estrutura relacional correta)
   const createMutation = useMutation({
-    mutationFn: async (data) => {
-      const sale = await api.entities.Sale.create(data);
-      
-      if (data.payment_method === 'credito_parcelado' && data.installments_data?.length) {
-        const installments = data.installments_data.map(inst => ({
-          sale_id: sale.id,
-          client_id: data.client_id,
-          client_name: data.client_name,
-          installment_number: inst.number,
-          total_installments: data.installments_data.length,
-          value: inst.value,
-          due_date: inst.due_date,
-          status: inst.status
-        }));
-        await base44.entities.Installment.bulkCreate(installments);
-      }
-      
-      return sale;
-    },
+    mutationFn: (formData) => api.entities.Sale.create(formData),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['sales'] });
-      queryClient.invalidateQueries({ queryKey: ['installments'] });
+      queryClient.invalidateQueries({ queryKey: ['vendas'] });
       setShowForm(false);
     }
   });
 
+  // ✅ Filtro por nome do cliente
   const filteredSales = sales.filter(sale =>
-    sale.client_name?.toLowerCase().includes(search.toLowerCase())
+    sale.cliente?.nome?.toLowerCase().includes(search.toLowerCase())
   );
 
-  const totalRevenue = sales.reduce((sum, sale) => sum + (sale.total_amount || 0), 0);
+  // ✅ Cálculo do faturamento total
+  const totalRevenue = sales.reduce((sum, sale) => sum + (sale.valor_total || 0), 0);
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
@@ -120,26 +107,26 @@ export default function Sales() {
               >
                 <div className="flex items-center gap-4">
                   <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${
-                    sale.payment_method === 'dinheiro' 
+                    sale.tipo_pagamento === 'dinheiro' 
                       ? 'bg-green-50 text-green-600' 
-                      : sale.payment_method === 'pix'
+                      : sale.tipo_pagamento === 'pix'
                       ? 'bg-purple-50 text-purple-600'
-                      : sale.payment_method === 'debito'
+                      : sale.tipo_pagamento === 'debito'
                       ? 'bg-blue-50 text-blue-600'
                       : 'bg-amber-50 text-amber-600'
                   }`}>
-                    {sale.payment_method === 'dinheiro' ? (
+                    {sale.tipo_pagamento === 'dinheiro' ? (
                       <Banknote className="w-5 h-5" />
-                    ) : sale.payment_method === 'pix' ? (
+                    ) : sale.tipo_pagamento === 'pix' ? (
                       <Smartphone className="w-5 h-5" />
                     ) : (
                       <CreditCard className="w-5 h-5" />
                     )}
                   </div>
                   <div>
-                    <h3 className="font-semibold text-stone-900">{sale.client_name}</h3>
+                    <h3 className="font-semibold text-stone-900">{sale.cliente?.nome || 'Cliente não identificado'}</h3>
                     <p className="text-sm text-stone-500">
-                      {sale.created_date && format(new Date(sale.created_date), "dd 'de' MMMM 'às' HH:mm", { locale: ptBR })}
+                      {sale.data_venda && format(new Date(sale.data_venda), "dd 'de' MMMM 'às' HH:mm", { locale: ptBR })}
                     </p>
                   </div>
                 </div>
@@ -147,30 +134,35 @@ export default function Sales() {
                 <div className="flex items-center gap-4">
                   <div className="text-right">
                     <p className="font-bold text-stone-900">
-                      R$ {sale.total_amount?.toFixed(2)}
+                      R$ {sale.valor_total?.toFixed(2)}
                     </p>
                     <Badge className="mt-1 bg-stone-100 text-stone-700">
-                      {sale.payment_method === 'dinheiro' ? 'Dinheiro' : 
-                       sale.payment_method === 'pix' ? 'PIX' :
-                       sale.payment_method === 'debito' ? 'Débito' :
-                       sale.payment_method === 'credito_avista' ? 'Crédito à Vista' :
-                       `${sale.installments_data?.length || 0}x Crédito`}
+                      {sale.tipo_pagamento === 'dinheiro' ? 'Dinheiro' :
+                      sale.tipo_pagamento === 'pix' ? 'PIX' :
+                      sale.tipo_pagamento === 'debito' ? 'Débito' :
+                      sale.tipo_pagamento === 'credito' ? 'Crédito' :
+                      sale.tipo_pagamento === 'prazo' ? `${sale.parcelas?.length || 0}x A Prazo` :
+                      'Outro'}
                     </Badge>
                   </div>
                   <div className="flex items-center gap-2">
-                    {sale.payment_method === 'credito_parcelado' && sale.installments_data?.length > 0 && (
+                    {sale.tipo_pagamento === 'prazo' && sale.parcelas?.length > 0 && (
                       <Button
                         size="icon"
                         variant="ghost"
                         onClick={(e) => {
                           e.stopPropagation();
-                          window.open(createPageUrl('PrintInstallments') + `?sale_id=${sale.id}`, '_blank');
+                          window.open(
+                            createPageUrl('PrintInstallments') + `?sale_id=${sale.id}`,
+                            '_blank'
+                          );
                         }}
                         className="h-8 w-8"
                       >
                         <Printer className="w-4 h-4 text-stone-600" />
                       </Button>
                     )}
+
                     {expandedSale === sale.id ? (
                       <ChevronUp className="w-5 h-5 text-stone-400" />
                     ) : (
@@ -182,54 +174,89 @@ export default function Sales() {
               
               {expandedSale === sale.id && (
                 <div className="px-5 pb-5 pt-0 border-t border-stone-100">
+                  {/* Informações do Cliente */}
+                  {sale.cliente && (
+                    <div className="mt-4 mb-4 p-3 bg-stone-50 rounded-lg">
+                      <h4 className="text-sm font-medium text-stone-600 mb-2">Informações do Cliente</h4>
+                      <div className="grid grid-cols-2 gap-2 text-sm">
+                        <div>
+                          <span className="text-stone-500">Nome:</span>
+                          <p className="font-medium text-stone-900">{sale.cliente.nome}</p>
+                        </div>
+                        {sale.cliente.celular && (
+                          <div>
+                            <span className="text-stone-500">Celular:</span>
+                            <p className="font-medium text-stone-900">{sale.cliente.celular}</p>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Itens da venda */}
                   <h4 className="text-sm font-medium text-stone-600 mt-4 mb-3">Itens da venda</h4>
                   <div className="space-y-2 mb-4">
-                    {sale.items?.map((item, index) => (
-                      <div key={index} className="flex items-center justify-between py-2 border-b border-stone-50 last:border-0">
+                    {sale.itens?.map((item, index) => (
+                      <div key={item.id_venda_item || index} className="flex items-center justify-between py-2 border-b border-stone-50 last:border-0">
                         <div>
-                          <p className="font-medium text-stone-900">{item.product_name}</p>
+                          <p className="font-medium text-stone-900">{item.produto?.nome || 'Produto não identificado'}</p>
                           <p className="text-sm text-stone-500">
-                            {item.quantity}x R$ {item.unit_price?.toFixed(2)}
+                            {item.quantidade}x R$ {item.preco_unitario_praticado?.toFixed(2)}
                           </p>
                         </div>
                         <p className="font-medium text-stone-900">
-                          R$ {item.total?.toFixed(2)}
+                          R$ {(item.quantidade * item.preco_unitario_praticado)?.toFixed(2)}
                         </p>
                       </div>
                     ))}
                   </div>
                   
-                  {(sale.discount > 0 || sale.addition > 0) && (
-                    <div className="space-y-1 text-sm mb-4">
-                      <div className="flex justify-between text-stone-600">
-                        <span>Subtotal:</span>
-                        <span>R$ {sale.subtotal?.toFixed(2)}</span>
-                      </div>
-                      {sale.discount > 0 && (
-                        <div className="flex justify-between text-green-600">
-                          <span>Desconto:</span>
-                          <span>- R$ {sale.discount.toFixed(2)}</span>
-                        </div>
-                      )}
-                      {sale.addition > 0 && (
-                        <div className="flex justify-between text-amber-600">
-                          <span>Acréscimo:</span>
-                          <span>+ R$ {sale.addition.toFixed(2)}</span>
-                        </div>
-                      )}
-                    </div>
-                  )}
-                  
-                  {sale.installments_data?.length > 0 && (
-                    <div>
+                  {/* Parcelas */}
+                  {sale.parcelas?.length > 0 && (
+                    <div className="mt-4">
                       <h4 className="text-sm font-medium text-stone-600 mb-2">Parcelas</h4>
-                      <div className="space-y-1 text-sm">
-                        {sale.installments_data.map((inst, i) => (
-                          <div key={i} className="flex justify-between text-stone-600">
-                            <span>Parcela {inst.number} - Venc: {new Date(inst.due_date).toLocaleDateString('pt-BR')}</span>
-                            <span>R$ {inst.value?.toFixed(2)}</span>
+                      <div className="space-y-2">
+                        {sale.parcelas.map((parcela, i) => (
+                          <div 
+                            key={parcela.id_parcelas} 
+                            className="flex items-center justify-between py-2 px-3 bg-stone-50 rounded-lg"
+                          >
+                            <div className="flex-1">
+                              <div className="flex items-center gap-2">
+                                <span className="text-sm font-medium text-stone-900">
+                                  Parcela {i + 1}
+                                </span>
+                                <Badge className={
+                                  parcela.status === 'paga' 
+                                    ? 'bg-green-100 text-green-700' 
+                                    : parcela.status === 'vencida'
+                                    ? 'bg-red-100 text-red-700'
+                                    : 'bg-amber-100 text-amber-700'
+                                }>
+                                  {parcela.status === 'paga' ? 'Paga' : 
+                                   parcela.status === 'vencida' ? 'Vencida' : 'Pendente'}
+                                </Badge>
+                              </div>
+                              <p className="text-xs text-stone-500 mt-1">
+                                Venc: {new Date(parcela.data_vencimento).toLocaleDateString('pt-BR')}
+                                {parcela.data_pagamento && (
+                                  <> • Paga em: {new Date(parcela.data_pagamento).toLocaleDateString('pt-BR')}</>
+                                )}
+                              </p>
+                            </div>
+                            <span className="font-medium text-stone-900">
+                              R$ {parcela.valor_parcela?.toFixed(2)}
+                            </span>
                           </div>
                         ))}
+                      </div>
+                      <div className="mt-3 pt-3 border-t border-stone-200 flex justify-between text-sm">
+                        <span className="text-stone-600">
+                          Total parcelado: {sale.parcelas.length}x
+                        </span>
+                        <span className="font-medium text-stone-900">
+                          {sale.parcelas.filter(p => p.status === 'paga').length} de {sale.parcelas.length} pagas
+                        </span>
                       </div>
                     </div>
                   )}

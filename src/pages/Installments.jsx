@@ -1,5 +1,4 @@
 import React, { useState } from 'react';
-import { base44 } from '@/api/base44Client';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -10,6 +9,7 @@ import { format, isAfter, isBefore } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 import InstallmentDetails from '@/components/installments/InstallmentDetails';
 import { createPageUrl } from '@/utils';
+import { api } from '@/api/supabaseClient';
 
 export default function Installments() {
   const [search, setSearch] = useState('');
@@ -20,16 +20,16 @@ export default function Installments() {
 
   const { data: installments = [], isLoading } = useQuery({
     queryKey: ['installments'],
-    queryFn: () => base44.entities.Installment.list('due_date')
+    queryFn: () => api.entities.Installment.list('due_date')
   });
 
   const { data: sales = [] } = useQuery({
     queryKey: ['sales'],
-    queryFn: () => base44.entities.Sale.list()
+    queryFn: () => api.entities.Sale.list()
   });
 
   const updateMutation = useMutation({
-    mutationFn: ({ id, data }) => base44.entities.Installment.update(id, data),
+    mutationFn: ({ id, data }) => api.entities.Installment.update(id, data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['installments'] });
       queryClient.invalidateQueries({ queryKey: ['installment-payments'] });
@@ -60,7 +60,7 @@ export default function Installments() {
 
   const filteredInstallments = installments
     .filter(inst => {
-      const matchesSearch = inst.client_name?.toLowerCase().includes(search.toLowerCase());
+      const matchesSearch = (inst.client_name || "").toLowerCase().includes(search.toLowerCase());
       const status = getInstallmentStatus(inst);
       const matchesStatus = statusFilter === 'all' || 
         (statusFilter === 'pendente' && status === 'pendente') ||

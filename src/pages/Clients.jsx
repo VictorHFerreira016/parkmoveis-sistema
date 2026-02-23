@@ -71,9 +71,9 @@ export default function Clients() {
   };
 
   const filteredClients = clients.filter(client =>
-    client.name?.toLowerCase().includes(search.toLowerCase()) ||
+    (client.name || client.nome)?.toLowerCase().includes(search.toLowerCase()) ||
     client.cpf?.includes(search) ||
-    client.phone?.includes(search)
+    (client.phone || client.celular)?.includes(search)
   );
 
   const formatDate = (dateString) => {

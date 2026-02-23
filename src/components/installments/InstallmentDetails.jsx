@@ -8,7 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { format } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 import { CheckCircle, AlertCircle, Clock, DollarSign } from 'lucide-react';
-import { base44 } from '@/api/base44Client';
+import { api } from '@/api/supabaseClient';
 import { useQuery } from '@tanstack/react-query';
 
 export default function InstallmentDetails({ installment, open, onClose, onPaymentComplete }) {
@@ -19,7 +19,7 @@ export default function InstallmentDetails({ installment, open, onClose, onPayme
 
   const { data: payments = [] } = useQuery({
     queryKey: ['installment-payments', installment?.id],
-    queryFn: () => base44.entities.InstallmentPayment.filter({ installment_id: installment.id }),
+    queryFn: () => api.entities.InstallmentPayment.filter({ installment_id: installment.id }),
     enabled: !!installment?.id
   });
 
@@ -33,7 +33,7 @@ export default function InstallmentDetails({ installment, open, onClose, onPayme
     try {
       const amount = payFull ? remainingAmount : parseFloat(paymentAmount);
       
-      await base44.entities.InstallmentPayment.create({
+      await api.entities.InstallmentPayment.create({
         installment_id: installment.id,
         sale_id: installment.sale_id,
         client_name: installment.client_name,
@@ -43,7 +43,7 @@ export default function InstallmentDetails({ installment, open, onClose, onPayme
       });
 
       if (payFull || (totalPaid + amount) >= installment.value) {
-        await base44.entities.Installment.update(installment.id, {
+        await api.entities.Installment.update(installment.id, {
           status: 'pago',
           payment_date: paymentDate
         });

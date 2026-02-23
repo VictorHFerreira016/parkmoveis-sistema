@@ -5,7 +5,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { base44 } from '@/api/base44Client';
+import { api } from '@/api/supabaseClient';
 import { Upload, Image as ImageIcon, Loader2 } from 'lucide-react';
 
 export default function ProductForm({ open, onClose, onSave, product }) {
@@ -48,7 +48,7 @@ export default function ProductForm({ open, onClose, onSave, product }) {
     if (!file) return;
     
     setUploading(true);
-    const { file_url } = await base44.integrations.Core.UploadFile({ file });
+    const { file_url } = await api.integrations.Core.UploadFile({ file });
     setFormData({ ...formData, image_url: file_url });
     setUploading(false);
   };

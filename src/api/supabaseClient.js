@@ -1,262 +1,282 @@
-// supabaseClient.js
-// Integração direta com Supabase
+// supabaseClient.js - VERSÃO CORRIGIDA E SIMPLIFICADA
+// ============================================================================
+// Este arquivo exporta o client do Supabase diretamente para uso em queries
+// ============================================================================
+
 import { createClient } from '@supabase/supabase-js';
 
-// Configuração do Supabase - use import.meta.env para Vite ou process.env para Create React App
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || '';
 const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || '';
 
-// Se você estiver usando Create React App, descomente as linhas abaixo e comente as de cima:
-// const supabaseUrl = process.env.REACT_APP_SUPABASE_URL || '';
-// const supabaseAnonKey = process.env.REACT_APP_SUPABASE_ANON_KEY || '';
+if (!supabaseUrl || !supabaseAnonKey) {
+  console.error('⚠️ AVISO: Variáveis de ambiente Supabase não configuradas!');
+  console.error('Certifique-se de que .env contém VITE_SUPABASE_URL e VITE_SUPABASE_ANON_KEY');
+}
 
+// Client principal do Supabase
 export const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
-// API adaptada para usar com seus componentes React
-export const api = {
+// Exporta também como 'api' para compatibilidade com código existente
+
+// ============================================================================
+// HELPERS ÚTEIS (OPCIONAL)
+// ============================================================================
+
+/**
+ * Formata erros do Supabase para facilitar debug
+ * @param {Error} error - Erro do Supabase
+ * @param {string} context - Contexto da operação
+ */
+export const logSupabaseError = (error, context) => {
+  console.error(`❌ Erro Supabase [${context}]:`, {
+    message: error.message,
+    code: error.code,
+    details: error.details,
+    hint: error.hint,
+    timestamp: new Date().toISOString()
+  });
+};
+
+/**
+ * Helper para buscar vendas com todos os relacionamentos
+ * @returns {Promise<Array>} Lista de vendas com clientes, itens e parcelas
+ */
+export const fetchVendasCompletas = async () => {
+  const { data, error } = await supabase
+    .from('vendas')
+    .select(`
+      *,
+      cliente:clientes!vendas_id_cliente_fkey(id_cliente, nome, celular, cpf),
+      itens:venda_itens(
+        id_venda_item,
+        id_produto,
+        quantidade,
+        preco_unitario_praticado,
+        produto:produtos!venda_itens_id_produto_fkey(id_produto, nome)
+      ),
+      parcelas(
+        id_parcelas,
+        data_vencimento,
+        valor_parcela,
+        status,
+        data_pagamento
+      )
+    `)
+    .order('data_venda', { ascending: false });
+
+  if (error) {
+    logSupabaseError(error, 'fetchVendasCompletas');
+    throw error;
+  }
+
+  return data;
+};
+
+/**
+ * Helper para criar uma venda completa (venda + itens + parcelas)
+ * @param {Object} vendaData - Dados da venda
+ * @returns {Promise<Object>} Venda criada
+ */
+export const criarVendaCompleta = async (vendaData) => {
+  try {
+    // 1️⃣ Criar venda principal
+    const { data: venda, error: vendaError } = await supabase
+      .from('vendas')
+      .insert({
+        id_cliente: vendaData.id_cliente,
+        valor_total: vendaData.valor_total,
+        tipo_pagamento: vendaData.tipo_pagamento,
+        status: vendaData.status || 'concluida'
+      })
+      .select()
+      .single();
+
+    if (vendaError) {
+      logSupabaseError(vendaError, 'criarVendaCompleta - Venda');
+      throw vendaError;
+    }
+
+    const vendaId = venda.id;
+
+    // 2️⃣ Criar itens da venda
+    if (vendaData.itens?.length > 0) {
+      const itensData = vendaData.itens.map(item => ({
+        id_venda: vendaId,
+        id_produto: item.id_produto,
+        quantidade: item.quantidade,
+        preco_unitario_praticado: item.preco_unitario_praticado
+      }));
+
+      const { error: itensError } = await supabase
+        .from('venda_itens')
+        .insert(itensData);
+
+      if (itensError) {
+        logSupabaseError(itensError, 'criarVendaCompleta - Itens');
+        // Rollback: deletar venda criada
+        await supabase.from('vendas').delete().eq('id', vendaId);
+        throw itensError;
+      }
+    }
+
+    // 3️⃣ Criar parcelas (se pagamento a prazo)
+    if (vendaData.tipo_pagamento === 'prazo' && vendaData.parcelas?.length > 0) {
+      const parcelasData = vendaData.parcelas.map(parcela => ({
+        id_venda: vendaId,
+        data_vencimento: parcela.data_vencimento,
+        valor_parcela: parcela.valor_parcela,
+        status: parcela.status || 'pendente'
+      }));
+
+      const { error: parcelasError } = await supabase
+        .from('parcelas')
+        .insert(parcelasData);
+
+      if (parcelasError) {
+        logSupabaseError(parcelasError, 'criarVendaCompleta - Parcelas');
+        // Rollback: deletar venda e itens criados
+        await supabase.from('venda_itens').delete().eq('id_venda', vendaId);
+        await supabase.from('vendas').delete().eq('id', vendaId);
+        throw parcelasError;
+      }
+    }
+
+    // 4️⃣ Buscar venda completa criada
+    const { data: vendaCompleta, error: fetchError } = await supabase
+      .from('vendas')
+      .select(`
+        *,
+        cliente:clientes!vendas_id_cliente_fkey(id_cliente, nome, celular),
+        itens:venda_itens(
+          id_venda_item,
+          id_produto,
+          quantidade,
+          preco_unitario_praticado,
+          produto:produtos!venda_itens_id_produto_fkey(id_produto, nome)
+        ),
+        parcelas(
+          id_parcelas,
+          data_vencimento,
+          valor_parcela,
+          status
+        )
+      `)
+      .eq('id', vendaId)
+      .single();
+
+    if (fetchError) {
+      logSupabaseError(fetchError, 'criarVendaCompleta - Fetch');
+      throw fetchError;
+    }
+
+    return vendaCompleta;
+  } catch (error) {
+    console.error('Erro ao criar venda completa:', error);
+    throw error;
+  }
+};
+
+/**
+ * Helper para marcar parcela como paga
+ * @param {number} parcelaId - ID da parcela
+ * @returns {Promise<Object>} Parcela atualizada
+ */
+export const marcarParcelaPaga = async (parcelaId) => {
+  const { data, error } = await supabase
+    .from('parcelas')
+    .update({
+      status: 'paga',
+      data_pagamento: new Date().toISOString().split('T')[0]
+    })
+    .eq('id_parcelas', parcelaId)
+    .select()
+    .single();
+
+  if (error) {
+    logSupabaseError(error, 'marcarParcelaPaga');
+    throw error;
+  }
+
+  return data;
+};
+
+/**
+ * Helper para buscar parcelas vencidas
+ * @returns {Promise<Array>} Lista de parcelas vencidas
+ */
+export const fetchParcelasVencidas = async () => {
+  const hoje = new Date().toISOString().split('T')[0];
+  
+  const { data, error } = await supabase
+    .from('parcelas')
+    .select(`
+      *,
+      venda:vendas!parcelas_id_venda_fkey(
+        id,
+        valor_total,
+        cliente:clientes!vendas_id_cliente_fkey(nome, celular)
+      )
+    `)
+    .eq('status', 'pendente')
+    .lt('data_vencimento', hoje)
+    .order('data_vencimento', { ascending: true });
+
+  if (error) {
+    logSupabaseError(error, 'fetchParcelasVencidas');
+    throw error;
+  }
+
+  return data;
+};
+
+/**
+ * Helper para buscar produtos com estoque baixo
+ * @param {number} limite - Quantidade mínima de estoque (padrão: 5)
+ * @returns {Promise<Array>} Lista de produtos
+ */
+export const fetchProdutosEstoqueBaixo = async (limite = 5) => {
+  const { data, error } = await supabase
+    .from('produtos')
+    .select('*')
+    .lte('quantidade', limite)
+    .order('quantidade', { ascending: true });
+
+  if (error) {
+    logSupabaseError(error, 'fetchProdutosEstoqueBaixo');
+    throw error;
+  }
+
+  return data;
+};
+
+// ============================================================================
+// COMPATIBILIDADE COM CÓDIGO LEGADO (se necessário)
+// ============================================================================
+
+// Se algum código antigo usa api.entities.Client, etc., você pode descomentar:
+/*
+export const apiLegado = {
   entities: {
     Client: {
-      async list() {
+      list: async () => {
         const { data, error } = await supabase
           .from('clientes')
-          .select(`
-            *,
-            enderecos(*),
-            telefones(*),
-            parentes(*)
-          `)
+          .select('*')
           .order('criado_em', { ascending: false });
         
         if (error) throw error;
         
-        return data.map(client => ({
-          id: client.id_cliente,
-          name: client.nome,
-          cpf: client.cpf,
-          rg: client.rg,
-          birthDate: client.data_nascimento,
-          occupation: client.ocupacao,
-          email: client.email,
-          phone: client.celular,
-          createdAt: client.criado_em,
-          addresses: client.enderecos || [],
-          phones: client.telefones || [],
-          relatives: client.parentes || []
+        // Converte para formato antigo se necessário
+        return data.map(c => ({
+          id: c.id_cliente,
+          name: c.nome,
+          phone: c.celular,
+          // ... outros campos
         }));
-      },
-
-      async get(id) {
-        const { data, error } = await supabase
-          .from('clientes')
-          .select(`
-            *,
-            enderecos(*),
-            telefones(*),
-            parentes(*)
-          `)
-          .eq('id_cliente', id)
-          .single();
-        
-        if (error) throw error;
-        
-        return {
-          id: data.id_cliente,
-          name: data.nome,
-          cpf: data.cpf,
-          rg: data.rg,
-          birthDate: data.data_nascimento,
-          occupation: data.ocupacao,
-          email: data.email,
-          phone: data.celular,
-          createdAt: data.criado_em,
-          addresses: data.enderecos || [],
-          phones: data.telefones || [],
-          relatives: data.parentes || []
-        };
-      },
-
-      async create(clientData) {
-        // 1. Criar o cliente
-        const { data: client, error: clientError } = await supabase
-          .from('clientes')
-          .insert({
-            nome: clientData.name,
-            cpf: clientData.cpf,
-            rg: clientData.rg,
-            data_nascimento: clientData.birthDate,
-            ocupacao: clientData.occupation,
-            email: clientData.email,
-            celular: clientData.phone
-          })
-          .select()
-          .single();
-        
-        if (clientError) throw clientError;
-
-        const clientId = client.id_cliente;
-
-        // 2. Criar endereços se houver
-        if (clientData.addresses && clientData.addresses.length > 0) {
-          const addressesData = clientData.addresses.map(addr => ({
-            id_cliente: clientId,
-            logradouro: addr.logradouro,
-            numero: addr.numero,
-            bairro: addr.bairro,
-            cidade: addr.cidade,
-            estado: addr.estado,
-            cep: addr.cep,
-            tipo: addr.tipo
-          }));
-
-          const { error: addressError } = await supabase
-            .from('enderecos')
-            .insert(addressesData);
-          
-          if (addressError) throw addressError;
-        }
-
-        // 3. Criar telefones adicionais se houver
-        if (clientData.phones && clientData.phones.length > 0) {
-          const phonesData = clientData.phones.map(phone => ({
-            id_cliente: clientId,
-            numero: phone.numero,
-            tipo: phone.tipo,
-            pertence_a: phone.pertence_a
-          }));
-
-          const { error: phoneError } = await supabase
-            .from('telefones')
-            .insert(phonesData);
-          
-          if (phoneError) throw phoneError;
-        }
-
-        // 4. Criar parentes se houver
-        if (clientData.relatives && clientData.relatives.length > 0) {
-          const relativesData = clientData.relatives.map(rel => ({
-            id_cliente: clientId,
-            nome_parente: rel.nome_parente,
-            parentesco: rel.parentesco
-          }));
-
-          const { error: relativeError } = await supabase
-            .from('parentes')
-            .insert(relativesData);
-          
-          if (relativeError) throw relativeError;
-        }
-
-        // 5. Retornar cliente completo
-        return await this.get(clientId);
-      },
-
-      async update(id, clientData) {
-        // 1. Atualizar dados do cliente
-        const { data: client, error: clientError } = await supabase
-          .from('clientes')
-          .update({
-            nome: clientData.name,
-            cpf: clientData.cpf,
-            rg: clientData.rg,
-            data_nascimento: clientData.birthDate,
-            ocupacao: clientData.occupation,
-            email: clientData.email,
-            celular: clientData.phone
-          })
-          .eq('id_cliente', id)
-          .select()
-          .single();
-        
-        if (clientError) throw clientError;
-
-        // 2. Gerenciar endereços
-        if (clientData.addresses) {
-          // Deletar endereços antigos
-          await supabase.from('enderecos').delete().eq('id_cliente', id);
-          
-          // Inserir novos endereços
-          if (clientData.addresses.length > 0) {
-            const addressesData = clientData.addresses.map(addr => ({
-              id_cliente: id,
-              logradouro: addr.logradouro,
-              numero: addr.numero,
-              bairro: addr.bairro,
-              cidade: addr.cidade,
-              estado: addr.estado,
-              cep: addr.cep,
-              tipo: addr.tipo
-            }));
-
-            await supabase.from('enderecos').insert(addressesData);
-          }
-        }
-
-        // 3. Gerenciar telefones
-        if (clientData.phones) {
-          // Deletar telefones antigos
-          await supabase.from('telefones').delete().eq('id_cliente', id);
-          
-          // Inserir novos telefones
-          if (clientData.phones.length > 0) {
-            const phonesData = clientData.phones.map(phone => ({
-              id_cliente: id,
-              numero: phone.numero,
-              tipo: phone.tipo,
-              pertence_a: phone.pertence_a
-            }));
-
-            await supabase.from('telefones').insert(phonesData);
-          }
-        }
-
-        // 4. Gerenciar parentes
-        if (clientData.relatives) {
-          // Deletar parentes antigos
-          await supabase.from('parentes').delete().eq('id_cliente', id);
-          
-          // Inserir novos parentes
-          if (clientData.relatives.length > 0) {
-            const relativesData = clientData.relatives.map(rel => ({
-              id_cliente: id,
-              nome_parente: rel.nome_parente,
-              parentesco: rel.parentesco
-            }));
-
-            await supabase.from('parentes').insert(relativesData);
-          }
-        }
-
-        // 5. Retornar cliente completo atualizado
-        return await this.get(id);
-      },
-
-      async delete(id) {
-        // O Supabase deve estar configurado com CASCADE DELETE
-        // Se não estiver, deletar manualmente as relações primeiro
-        
-        // Deletar endereços
-        await supabase.from('enderecos').delete().eq('id_cliente', id);
-        
-        // Deletar telefones
-        await supabase.from('telefones').delete().eq('id_cliente', id);
-        
-        // Deletar parentes
-        await supabase.from('parentes').delete().eq('id_cliente', id);
-        
-        // Deletar cliente
-        const { error } = await supabase
-          .from('clientes')
-          .delete()
-          .eq('id_cliente', id);
-        
-        if (error) throw error;
-        
-        return { success: true };
       }
     },
-
     Product: {
-      async list() {
+      list: async () => {
         const { data, error } = await supabase
           .from('produtos')
           .select('*')
@@ -264,202 +284,285 @@ export const api = {
         
         if (error) throw error;
         
-        return data.map(product => ({
-          id: product.id_produto,
-          barcode: product.codigo_barras,
-          name: product.nome,
-          description: product.descricao,
-          brand: product.fabrica_modelo,
-          stock: product.quantidade,
-          stockLocation: product.local_estoque,
-          price: parseFloat(product.preco_base_vista || 0),
-          installmentPrice: parseFloat(product.preco_base_prazo || 0),
-          sale_price: parseFloat(product.preco_base_vista || 0),
-          cost_price: parseFloat(product.preco_base_prazo || 0)
+        return data.map(p => ({
+          id: p.id_produto,
+          name: p.nome,
+          price: p.preco_base_vista,
+          // ... outros campos
+        }));
+      }
+    },
+    Sale: {
+      list: async () => {
+        return fetchVendasCompletas();
+      },
+      create: async (data) => {
+        return criarVendaCompleta(data);
+      }
+    }
+  }
+};
+*/
+
+// supabaseClient.js - ADICIONE OU SUBSTITUA NO FINAL DO ARQUIVO
+
+export const api = {
+  ...supabase,
+  entities: {
+    Client: {
+      list: async () => {
+        const { data, error } = await supabase
+          .from('clientes')
+          .select('*')
+          .order('nome', { ascending: true });
+        
+        if (error) throw error;
+        
+        // Mapeia os nomes das colunas do seu banco para o que o React espera
+        return data.map(c => ({
+          ...c,
+          id: c.id_cliente, // De id_cliente para id
+          name: c.nome,       // De nome para name
+          phone: c.celular,   // De celular para phone
+          birthDate: c.data_nascimento,
+          occupation: c.ocupacao
+        }));
+      },
+      create: async (payload) => {
+        const { data, error } = await supabase
+          .from('clientes')
+          .insert([{
+            nome: payload.name,
+            cpf: payload.cpf,
+            celular: payload.phone,
+            email: payload.email,
+            rg: payload.rg,
+            data_nascimento: payload.birthDate,
+            ocupacao: payload.occupation
+          }])
+          .select().single();
+        if (error) throw error;
+        return data;
+      },
+      update: async (id, payload) => {
+        const { data, error } = await supabase
+          .from('clientes')
+          .update({
+            nome: payload.name,
+            celular: payload.phone,
+            cpf: payload.cpf,
+            email: payload.email,
+            rg: payload.rg,
+            data_nascimento: payload.birthDate,
+            ocupacao: payload.occupation
+          })
+          .eq('id_cliente', id)
+          .select().single();
+        if (error) throw error;
+        return data;
+      },
+      delete: async (id) => {
+        const { error } = await supabase
+          .from('clientes')
+          .delete()
+          .eq('id_cliente', id);
+        if (error) throw error;
+        return true;
+      }
+    },
+    Product: {
+      list: async () => {
+        const { data, error } = await supabase
+          .from('produtos') // Verifique se o nome da tabela no seu Supabase é 'produtos'
+          .select('*')
+          .order('nome', { ascending: true });
+        
+        if (error) throw error;
+        
+        // Mapeia os campos do banco para o que o componente Products.jsx espera
+        return data.map(p => ({
+          ...p,
+          id: p.id_produto,
+          name: p.nome,
+          brand: p.marca,
+          category: p.categoria,
+          price: p.preco_base_vista,
+          sale_price: p.preco_venda,
+          cost_price: p.preco_custo,
+          stock: p.quantidade,
+          image_url: p.imagem_url
         }));
       },
 
-      async get(id) {
+      create: async (payload) => {
         const { data, error } = await supabase
           .from('produtos')
-          .select('*')
-          .eq('id_produto', id)
-          .single();
-        
+          .insert([{
+            nome: payload.name,
+            marca: payload.brand,
+            categoria: payload.category,
+            preco_base_vista: payload.price,
+            quantidade: payload.stock,
+            imagem_url: payload.image_url
+            // adicione outros campos conforme sua tabela
+          }])
+          .select().single();
         if (error) throw error;
-        
-        return {
-          id: data.id_produto,
-          barcode: data.codigo_barras,
-          name: data.nome,
-          description: data.descricao,
-          brand: data.fabrica_modelo,
-          stock: data.quantidade,
-          stockLocation: data.local_estoque,
-          price: parseFloat(data.preco_base_vista || 0),
-          installmentPrice: parseFloat(data.preco_base_prazo || 0),
-          sale_price: parseFloat(data.preco_base_vista || 0),
-          cost_price: parseFloat(data.preco_base_prazo || 0)
-        };
+        return data;
       },
 
-      async create(productData) {
-        const { data, error } = await supabase
-          .from('produtos')
-          .insert({
-            codigo_barras: productData.barcode,
-            nome: productData.name,
-            descricao: productData.description,
-            fabrica_modelo: productData.brand,
-            quantidade: productData.stock || 0,
-            local_estoque: productData.stockLocation,
-            preco_base_vista: productData.price,
-            preco_base_prazo: productData.installmentPrice
-          })
-          .select()
-          .single();
-        
-        if (error) throw error;
-        
-        return {
-          id: data.id_produto,
-          barcode: data.codigo_barras,
-          name: data.nome,
-          description: data.descricao,
-          brand: data.fabrica_modelo,
-          stock: data.quantidade,
-          stockLocation: data.local_estoque,
-          price: parseFloat(data.preco_base_vista || 0),
-          installmentPrice: parseFloat(data.preco_base_prazo || 0)
-        };
-      },
-
-      async update(id, productData) {
+      update: async (id, payload) => {
         const { data, error } = await supabase
           .from('produtos')
           .update({
-            codigo_barras: productData.barcode,
-            nome: productData.name,
-            descricao: productData.description,
-            fabrica_modelo: productData.brand,
-            quantidade: productData.stock,
-            local_estoque: productData.stockLocation,
-            preco_base_vista: productData.price,
-            preco_base_prazo: productData.installmentPrice
+            nome: payload.name,
+            marca: payload.brand,
+            categoria: payload.category,
+            preco_base_vista: payload.price,
+            quantidade: payload.stock
           })
           .eq('id_produto', id)
-          .select()
-          .single();
-        
+          .select().single();
         if (error) throw error;
-        
-        return {
-          id: data.id_produto,
-          barcode: data.codigo_barras,
-          name: data.nome,
-          description: data.descricao,
-          brand: data.fabrica_modelo,
-          stock: data.quantidade,
-          stockLocation: data.local_estoque,
-          price: parseFloat(data.preco_base_vista || 0),
-          installmentPrice: parseFloat(data.preco_base_prazo || 0)
-        };
+        return data;
       },
 
-      async delete(id) {
+      delete: async (id) => {
         const { error } = await supabase
           .from('produtos')
           .delete()
           .eq('id_produto', id);
-        
         if (error) throw error;
-        
-        return { success: true };
+        return true;
       }
     },
-
-    Address: {
-      async create(addressData) {
-        const { data, error } = await supabase
-          .from('enderecos')
-          .insert({
-            id_cliente: addressData.clientId,
-            logradouro: addressData.street,
-            numero: addressData.number,
-            bairro: addressData.neighborhood,
-            cidade: addressData.city,
-            estado: addressData.state,
-            cep: addressData.zipCode,
-            tipo: addressData.type
-          })
-          .select()
-          .single();
-        
-        if (error) throw error;
-        return data;
-      },
-
-      async update(id, addressData) {
-        const { data, error } = await supabase
-          .from('enderecos')
-          .update({
-            logradouro: addressData.street,
-            numero: addressData.number,
-            bairro: addressData.neighborhood,
-            cidade: addressData.city,
-            estado: addressData.state,
-            cep: addressData.zipCode,
-            tipo: addressData.type
-          })
-          .eq('id_endereco', id)
-          .select()
-          .single();
-        
-        if (error) throw error;
-        return data;
-      },
-
-      async delete(id) {
-        const { error } = await supabase
-          .from('enderecos')
-          .delete()
-          .eq('id_endereco', id);
-        
-        if (error) throw error;
-        return { success: true };
-      }
-    },
+    // Dentro do objeto api em supabaseClient.js
 
     Sale: {
-      async list() {
+      list: async () => {
         const { data, error } = await supabase
           .from('vendas')
           .select(`
             *,
-            clientes(nome, cpf),
-            venda_itens(*, produtos(nome))
+            cliente:clientes!vendas_id_cliente_fkey(id_cliente, nome, celular),
+            itens:venda_itens(
+              id_venda_item,
+              id_produto,
+              quantidade,
+              preco_unitario_praticado,
+              produto:produtos!venda_itens_id_produto_fkey(id_produto, nome)
+            ),
+            parcelas(
+              id_parcelas,
+              data_vencimento,
+              valor_parcela,
+              status,
+              data_pagamento
+            )
           `)
           .order('data_venda', { ascending: false });
-        
+
         if (error) throw error;
         return data;
       },
 
-      async create(saleData) {
-        const { data, error } = await supabase
+      create: async (formData) => {
+        // 1️⃣ Inserir venda principal
+        const { data: venda, error: vendaError } = await supabase
           .from('vendas')
-          .insert({
-            id_cliente: saleData.clientId,
-            valor_total: saleData.totalValue,
-            tipo_pagamento: saleData.paymentType,
-            status: saleData.status || 'pendente'
-          })
+          .insert([{
+            id_cliente: formData.id_cliente,
+            valor_total: formData.valor_total,
+            tipo_pagamento: formData.tipo_pagamento,
+            status: formData.status || 'concluida'
+          }])
           .select()
           .single();
-        
+
+        if (vendaError) throw vendaError;
+
+        // 2️⃣ Inserir itens da venda
+        if (formData.itens?.length > 0) {
+          const vendaItens = formData.itens.map(item => ({
+            id_venda: venda.id, // O id gerado pela venda acima
+            id_produto: item.id_produto,
+            quantidade: item.quantidade,
+            preco_unitario_praticado: item.preco_unitario_praticado
+          }));
+
+          const { error: itensError } = await supabase
+            .from('venda_itens')
+            .insert(vendaItens);
+
+          if (itensError) throw itensError;
+        }
+
+        // 3️⃣ Inserir parcelas (se for a prazo)
+        if (formData.tipo_pagamento === 'prazo' && formData.parcelas?.length > 0) {
+          const parcelas = formData.parcelas.map(parcela => ({
+            id_venda: venda.id,
+            data_vencimento: parcela.data_vencimento,
+            valor_parcela: parcela.valor_parcela,
+            status: parcela.status || 'pendente'
+          }));
+
+          const { error: parcelasError } = await supabase
+            .from('parcelas')
+            .insert(parcelas);
+
+          if (parcelasError) throw parcelasError;
+        }
+
+        return venda;
+      }
+    },
+    // Dentro do objeto api em supabaseClient.js
+
+    Installment: {
+      list: async () => {
+        const { data, error } = await supabase
+          .from('parcelas')
+          .select(`
+            *,
+            venda:vendas(
+              id,
+              cliente:clientes(nome, cpf, celular)
+            )
+          `)
+          .order('data_vencimento', { ascending: true });
+
+        if (error) {
+          console.error("Erro na busca de parcela: ", error);
+          throw error;
+        }
+
+        // Mapeia para o formato que o componente Installments.jsx espera
+        return data.map(p => ({
+          id: p.id_parcelas,
+          sale_id: p.id_venda,
+          due_date: p.data_vencimento,
+          value: p.valor_parcela,
+          status: p.status,
+          payment_date: p.data_pagamento,
+          client_name: p.venda?.cliente?.nome || 'Cliente não identificado',
+          client_cpf: p.venda?.cliente?.cpf,
+          installment_number: p.numero_parcela || 1,
+          total_installments: p.total_parcelas || 1
+        }));
+      },
+
+      update: async (id, payload) => {
+        const { data, error } = await supabase
+          .from('parcelas')
+          .update(payload)
+          .eq('id_parcelas', id)
+          .select()
+          .single();
         if (error) throw error;
         return data;
       }
     }
   }
 };
+
+export default supabase;
